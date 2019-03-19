@@ -8,8 +8,8 @@ import tensorflow as tf
 import numpy as np
 
 z_dim = 1024
-img_w = 40
-img_h = 40
+img_w = 80
+img_h = 80
 
 # 画像の入ったZIPを開く
 # http://mmlab.ie.cuhk.edu.hk/projects/CelebA.html
@@ -44,6 +44,10 @@ def encoder(x, training):
   with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
     h = x
     # (40, 40, 3)
+    h = tf.layers.conv2d(h, 32, (5, 5), (2, 2), padding="same")
+    h = tf.layers.batch_normalization(h, training=training)
+    h = tf.nn.relu(h)
+    # (80, 80, 32)
     h = tf.layers.conv2d(h, 64, (5, 5), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
@@ -88,8 +92,12 @@ def decoder(z, training):
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
     # (40, 40, 32)
+    h = tf.layers.conv2d_transpose(h, 32, (3, 3), (2, 2), padding="same")
+    h = tf.layers.batch_normalization(h, training=training)
+    h = tf.nn.relu(h)
+    # (80, 80, 32)
     h = tf.layers.conv2d(h, 3, (3, 3), padding="same", activation=tf.nn.sigmoid)
-    # (40, 40, 3)
+    # (80, 80, 3)
   return h
 
 sess = tf.Session()
@@ -114,10 +122,11 @@ def train():
   sess.run(tf.global_variables_initializer())
 
   batch_size = 1000
-  for idx in range(0, len(train_id), batch_size):
-    img = [read_image(id) for id in train_id[idx:idx+batch_size]]
-    _, _, lb = sess.run([optimize, update, lower_bound], feed_dict={x: img})
-    print(idx, lb)
+  for epoch in range(4):
+    for idx in range(0, len(train_id), batch_size):
+      img = [read_image(id) for id in train_id[idx:idx+batch_size]]
+      _, _, lb = sess.run([optimize, update, lower_bound], feed_dict={x: img})
+      print(epoch, idx, lb)
 
 train()
 
