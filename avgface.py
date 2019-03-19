@@ -8,8 +8,8 @@ import tensorflow as tf
 import numpy as np
 
 z_dim = 1024
-img_w = 80
-img_h = 80
+img_w = 160
+img_h = 160
 
 # 画像の入ったZIPを開く
 # http://mmlab.ie.cuhk.edu.hk/projects/CelebA.html
@@ -28,7 +28,7 @@ def read_image(id):
   left = (178-160)//2
   top = (218-160)//2
   img = img.crop((left, top, left+160, top+160))
-  img = img.resize((img_w, img_h), Image.LANCZOS)
+  #img = img.resize((img_w, img_h), Image.LANCZOS)
   return np.array(img)/255.0
 
 # 画像のIDを学習用等に分割
@@ -43,7 +43,7 @@ test_id = image_id[-1000:]
 def encoder(x, training):
   with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
     h = x
-    # (40, 40, 3)
+    # (160, 160, 3)
     h = tf.layers.conv2d(h, 32, (5, 5), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
@@ -51,17 +51,21 @@ def encoder(x, training):
     h = tf.layers.conv2d(h, 64, (5, 5), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
-    # (20, 20, 64)
+    # (40, 40, 64)
     h = tf.layers.conv2d(h, 128, (5, 5), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
-    # (10, 10, 128)
+    # (20, 20, 128)
     h = tf.layers.conv2d(h, 256, (5, 5), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
-    # (5, 5, 256)
+    # (10, 10, 256)
+    h = tf.layers.conv2d(h, 512, (5, 5), (2, 2), padding="same")
+    h = tf.layers.batch_normalization(h, training=training)
+    h = tf.nn.relu(h)
+    # (5, 5, 512)
     h = tf.layers.flatten(h)
-    # (6400)
+    # (12800)
     h = tf.layers.dense(h, 1024)
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
@@ -74,30 +78,30 @@ def decoder(z, training):
   with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
     h = z
     # (1024)
-    h = tf.layers.dense(h, 6400)
+    h = tf.layers.dense(h, 12800)
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
-    # (6400)
-    h = tf.reshape(h, [-1, 5, 5, 256])
-    # (5, 5, 256)
+    # (12800)
+    h = tf.reshape(h, [-1, 5, 5, 512])
+    # (5, 5, 512)
     h = tf.layers.conv2d_transpose(h, 256, (3, 3), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
-    # (10, 10, 128)
+    # (10, 10, 256)
+    h = tf.layers.conv2d_transpose(h, 128, (3, 3), (2, 2), padding="same")
+    h = tf.layers.batch_normalization(h, training=training)
+    h = tf.nn.relu(h)
+    # (20, 20, 128)
     h = tf.layers.conv2d_transpose(h, 64, (3, 3), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
-    # (20, 20, 64)
-    h = tf.layers.conv2d_transpose(h, 32, (3, 3), (2, 2), padding="same")
-    h = tf.layers.batch_normalization(h, training=training)
-    h = tf.nn.relu(h)
-    # (40, 40, 32)
+    # (40, 40, 64)
     h = tf.layers.conv2d_transpose(h, 32, (3, 3), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
     # (80, 80, 32)
-    h = tf.layers.conv2d(h, 3, (3, 3), padding="same", activation=tf.nn.sigmoid)
-    # (80, 80, 3)
+    h = tf.layers.conv2d_transpose(h, 3, (3, 3), (2, 2), padding="same", activation=tf.nn.sigmoid)
+    # (160, 160, 3)
   return h
 
 sess = tf.Session()
@@ -121,7 +125,7 @@ def train():
 
   sess.run(tf.global_variables_initializer())
 
-  batch_size = 1000
+  batch_size = 256
   for epoch in range(4):
     for idx in range(0, len(train_id), batch_size):
       img = [read_image(id) for id in train_id[idx:idx+batch_size]]
@@ -132,13 +136,13 @@ train()
 
 # 潜在変数の平均値を求める
 x = tf.placeholder(tf.float32, [None, img_w, img_h, 3])
-img = [read_image(id) for id in valid_id]
+img = [read_image(id) for id in valid_id[:256]]
 z, _ = sess.run(encoder(x, False), feed_dict={x: img})
 z_avg = np.mean(z, axis=0)
 print("z_avg", z_avg.tolist())
 
 # 顔を平均顔に近づける
-num = 16
+num = 8
 org = [read_image(id) for id in test_id[:num]]
 z_in, _ = sess.run(encoder(x, False), feed_dict={x: org})
 
