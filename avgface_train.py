@@ -52,46 +52,51 @@ def encoder(x, training):
   with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
     h = x
     # (160, 160, 3)
-    h = tf.layers.conv2d(h, 32, (5, 5), (2, 2), padding="same")
+    h = tf.layers.conv2d(h, 32, (4, 4), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
     # (80, 80, 32)
-    h = tf.layers.conv2d(h, 64, (5, 5), (2, 2), padding="same")
+    h = tf.layers.conv2d(h, 64, (4, 4), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
     # (40, 40, 64)
-    h = tf.layers.conv2d(h, 128, (5, 5), (2, 2), padding="same")
+    h = tf.layers.conv2d(h, 128, (4, 4), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
     # (20, 20, 128)
-    h = tf.layers.conv2d(h, 256, (5, 5), (2, 2), padding="same")
+    h = tf.layers.conv2d(h, 256, (4, 4), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
     # (10, 10, 256)
-    h = tf.layers.conv2d(h, 512, (5, 5), (2, 2), padding="same")
+    h = tf.layers.conv2d(h, 256, (4, 4), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
-    # (5, 5, 512)
+    # (5, 5, 256)
     h = tf.layers.flatten(h)
-    # (12800)
-    h = tf.layers.dense(h, 1024)
+    # (6400)
+    h = tf.layers.dense(h, 512)
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
-    # (1024)
+    # (512)
     mean = tf.layers.dense(h, z_dim)
     var = tf.layers.dense(h, z_dim, tf.nn.softplus)
+    # (256)
   return mean, var
 
 def decoder(z, training):
   with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
     h = z
     # (256)
-    h = tf.layers.dense(h, 12800)
+    h = tf.layers.dense(h, 512)
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
-    # (12800)
-    h = tf.reshape(h, (-1, 5, 5, 512))
-    # (5, 5, 512)
+    # (512)
+    h = tf.layers.dense(h, 6400)
+    h = tf.layers.batch_normalization(h, training=training)
+    h = tf.nn.relu(h)
+    # (6400)
+    h = tf.reshape(h, (-1, 5, 5, 256))
+    # (5, 5, 256)
     h = tf.layers.conv2d_transpose(h, 256, (3, 3), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
@@ -129,7 +134,7 @@ update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 sess.run(tf.global_variables_initializer())
 
 batch_size = 256
-for epoch in range(16):
+for epoch in range(8):
   print("epoch", epoch)
 
   # 学習
