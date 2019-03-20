@@ -7,7 +7,7 @@ import random
 import tensorflow as tf
 import numpy as np
 
-z_dim = 1024
+z_dim = 256
 img_w = 160
 img_h = 160
 
@@ -70,7 +70,7 @@ def encoder(x, training):
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
     # (1024)
-    mean = tf.layers.dense(h, 1024)
+    mean = tf.layers.dense(h, z_dim)
     var = tf.layers.dense(h, z_dim, tf.nn.softplus)
   return mean, var
 
