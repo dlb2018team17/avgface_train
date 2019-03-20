@@ -117,8 +117,8 @@ def train():
   y = decoder(z, True)
 
   KL = -0.5*tf.reduce_mean(tf.reduce_sum(1+tf_log(var)-mean**2-var, axis=1))
-  entropy = tf.reduce_mean(tf.reduce_sum(x*tf_log(y) + (1-x)*tf_log(1-y), axis=[1, 2, 3]))
-  lower_bound = [-KL, entropy]
+  diff = tf.reduce_mean(tf.reduce_sum(tf.square(x-y), axis=[1, 2, 3]))
+  lower_bound = [-KL*0.01, -diff]
   cost = -tf.reduce_sum(lower_bound)
   optimize = tf.train.AdamOptimizer().minimize(cost)
   update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -142,7 +142,7 @@ z_avg = np.mean(z, axis=0)
 print("z_avg", z_avg.tolist())
 
 # 顔を平均顔に近づける
-num = 8
+num = 32
 org = [read_image(id) for id in test_id[:num]]
 z_in, _ = sess.run(encoder(x, False), feed_dict={x: org})
 
