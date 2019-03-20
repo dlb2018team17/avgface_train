@@ -7,7 +7,7 @@ import random
 import tensorflow as tf
 import numpy as np
 
-z_dim = 256
+z_dim = 257
 img_w = 160
 img_h = 160
 
@@ -22,22 +22,30 @@ print("load zip")
 image_num = 202599
 
 def read_image(id):
-  bin = zipfile.read("img_align_celeba/%06d.jpg"%id)
+  bin = zipfile.read("img_align_celeba/%06d.jpg"%abs(id))
   img = Image.open(BytesIO(bin))
   # 中央160x160を切り出す
   left = (178-160)//2
   top = (218-160)//2
   img = img.crop((left, top, left+160, top+160))
   #img = img.resize((img_w, img_h), Image.LANCZOS)
-  return np.array(img)/255.0
+  img = np.array(img)/255.0
+  if id>=0:
+    return img
+  else:
+    return img[:, ::-1, :]
 
 # 画像のIDを学習用等に分割
 image_id = list(range(1, image_num+1))
 random.seed(1234)
 random.shuffle(image_id)
-train_id = image_id[:-2000]
-valid_id = image_id[-2000:-1000]
+train_id = image_id[:-1000]
 test_id = image_id[-1000:]
+# 負値ならば左右反転
+train_id += [-id for id in train_id]
+random.shuffle(train_id)
+
+sess = tf.Session()
 
 # モデル
 def encoder(x, training):
@@ -77,12 +85,12 @@ def encoder(x, training):
 def decoder(z, training):
   with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
     h = z
-    # (1024)
+    # (256)
     h = tf.layers.dense(h, 12800)
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
     # (12800)
-    h = tf.reshape(h, [-1, 5, 5, 512])
+    h = tf.reshape(h, (-1, 5, 5, 512))
     # (5, 5, 512)
     h = tf.layers.conv2d_transpose(h, 256, (3, 3), (2, 2), padding="same")
     h = tf.layers.batch_normalization(h, training=training)
@@ -104,63 +112,84 @@ def decoder(z, training):
     # (160, 160, 3)
   return h
 
-sess = tf.Session()
-
-# 学習
-def train():
-  def tf_log(x):
+def tf_log(x):
     return tf.log(tf.maximum(x, 1e-10))
 
-  x = tf.placeholder(tf.float32, [None, img_w, img_h, 3])
-  mean, var = encoder(x, True)
-  z = mean + tf.sqrt(var) * tf.random_normal(tf.shape(mean))
-  y = decoder(z, True)
+x = tf.placeholder(tf.float32, (None, img_w, img_h, 3))
+mean, var = encoder(x, True)
+z = mean + tf.sqrt(var) * tf.random_normal(tf.shape(mean))
+y = decoder(z, True)
 
-  KL = -0.5*tf.reduce_mean(tf.reduce_sum(1+tf_log(var)-mean**2-var, axis=1))
-  diff = tf.reduce_mean(tf.reduce_sum(tf.square(x-y), axis=[1, 2, 3]))
-  lower_bound = [-KL*0.01, -diff]
-  cost = -tf.reduce_sum(lower_bound)
-  optimize = tf.train.AdamOptimizer().minimize(cost)
-  update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+rand_diff = -0.5*tf.reduce_mean(tf.reduce_sum(1+tf_log(var)-mean**2-var, axis=1))
+img_diff = tf.reduce_mean(tf.reduce_sum(tf.square(x-y), axis=(1, 2, 3)))
+cost = rand_diff*0.01 + img_diff
+optimize = tf.train.AdamOptimizer().minimize(cost)
+update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
-  sess.run(tf.global_variables_initializer())
+sess.run(tf.global_variables_initializer())
 
-  batch_size = 256
-  for epoch in range(4):
-    for idx in range(0, len(train_id), batch_size):
-      img = [read_image(id) for id in train_id[idx:idx+batch_size]]
-      _, _, lb = sess.run([optimize, update, lower_bound], feed_dict={x: img})
-      print(epoch, idx, lb)
+batch_size = 256
+for epoch in range(16):
+  print("epoch", epoch)
 
-train()
+  # 学習
+  for idx in range(0, len(train_id), batch_size):
+    img = [read_image(id) for id in train_id[idx:idx+batch_size]]
+    _, _, rd, id = sess.run(
+      [optimize, update, rand_diff, img_diff],
+      feed_dict={x: img})
+    print(epoch, idx, rd, id)
 
-# 潜在変数の平均値を求める
-x = tf.placeholder(tf.float32, [None, img_w, img_h, 3])
-img = [read_image(id) for id in valid_id[:256]]
-z, _ = sess.run(encoder(x, False), feed_dict={x: img})
-z_avg = np.mean(z, axis=0)
-print("z_avg", z_avg.tolist())
+  # 潜在変数の平均値を求める
+  z_sum = np.array([0.0]*z_dim)
+  z_tmp = tf.reduce_sum(encoder(x, False)[0], axis=0)
+  for idx in range(0, len(train_id), batch_size):
+    img = [read_image(id) for id in train_id[idx:idx+batch_size]]
+    z_sum += sess.run(z_tmp, feed_dict={x: img})
+    print(epoch, idx)
+  z_avg = z_sum/len(train_id)
+  print("z_avg", z_avg.tolist())
 
-# 顔を平均顔に近づける
-num = 32
-org = [read_image(id) for id in test_id[:num]]
-z_in, _ = sess.run(encoder(x, False), feed_dict={x: org})
+  # 平均化用モデルの構築
+  z_org = encoder(x, False)[0]
+  p = tf.placeholder(tf.float32, (None,))
+  p_tmp = tf.tile(tf.expand_dims(p, 1), [1, z_dim])
+  z_mod = z_org*(1-p_tmp) + z_avg*(p_tmp)
+  y_mod = decoder(z_mod, False)
 
-z = tf.placeholder(tf.float32, [None, z_dim])
+  # 途中のモデルを保存
+  tf.saved_model.simple_save(
+    sess,
+    "report/model_%d"%epoch,
+    {"input": x},
+    {"output": y_mod, "z": z_mod})
 
-result = [[None]*11 for _ in range(num)]
-for i in range(0, 11):
-  p = i/10  # [0.0, 1.0]
-  res = sess.run(decoder(z, False), feed_dict={z: z_in*(1-p)+z_avg*p})
-  for j in range(num):
-    result[j][i] = res[j]
+  # 途中の画像を出力
+  num = 32
+  img_in = []
+  p_in = []
+  for i in range(num):
+    for j in range(11):
+      img_in += [read_image(test_id[i])]
+      p_in += [j/10]
+  img_out = sess.run(y_mod, feed_dict={x: img_in, p: p_in})
 
-# 結果を画像にまとめて出力
-img = Image.new("RGB", (img_w*12, img_h*num))
-for i in range(num):
-  # 左端はオリジナル画像
-  img.paste(Image.fromarray((org[i]*255).astype('uint8')), (0, i*img_h))
-  # 徐々に平均顔に近づけた画像
-  for j in range(0, 11):
-    img.paste(Image.fromarray((result[i][j]*255).astype('uint8')), ((1+j)*img_w, i*img_h))
-img.save("result.png")
+  canvas = Image.new("RGB", (img_w*12, img_h*num))
+  for i in range(num):
+    # 左端はオリジナル画像
+    canvas.paste(Image.fromarray((img_in[i*11]*255).astype('uint8')),
+      (0, i*img_h))
+    # 徐々に平均顔に近づけた画像
+    for j in range(0, 11):
+      canvas.paste(Image.fromarray((img_out[i*11+j]*255).astype('uint8')),
+        ((1+j)*img_w, i*img_h))
+  canvas.save("report/result_%d.png"%epoch)
+
+# モデルを保存
+tf.saved_model.simple_save(
+  sess,
+  "model",
+  {"input": x},
+  {"output": y_mod, "z": z_mod})
+
+print("end")
