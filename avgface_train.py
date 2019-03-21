@@ -176,7 +176,7 @@ def make_vae(x):
   loss3 = tf.reduce_mean(tf.square(1-r))
 
   optimizer = tf.train.AdamOptimizer().minimize(
-    loss = loss1*0.01 + loss2 + loss3*1000,
+    loss = loss1*0.01 + loss2 + loss3*500,
     var_list = (
       tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="encoder") +
       tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="decoder")))
