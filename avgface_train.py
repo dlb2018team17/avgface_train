@@ -113,8 +113,43 @@ def decoder(z, training):
     h = tf.layers.batch_normalization(h, training=training)
     h = tf.nn.relu(h)
     # (80, 80, 32)
-    h = tf.layers.conv2d_transpose(h, 3, (3, 3), (2, 2), padding="same", activation=tf.nn.sigmoid)
+    h = tf.layers.conv2d_transpose(h, 3, (3, 3), (2, 2), padding="same")
+    h = tf.nn.sigmoid(h)
     # (160, 160, 3)
+  return h
+
+def discriminator(x):
+  with tf.variable_scope("discriminator", reuse=tf.AUTO_REUSE):
+    h = x
+    # (160, 160, 3)
+    h = tf.layers.conv2d(h, 32, (4, 4), (2, 2), padding="same")
+    h = tf.layers.batch_normalization(h, training=True)
+    h = tf.nn.leaky_relu(h)
+    # (80, 80, 8)
+    h = tf.layers.conv2d(h, 64, (4, 4), (2, 2), padding="same")
+    h = tf.layers.batch_normalization(h, training=True)
+    h = tf.nn.leaky_relu(h)
+    # (40, 40, 16)
+    h = tf.layers.conv2d(h, 128, (4, 4), (2, 2), padding="same")
+    h = tf.layers.batch_normalization(h, training=True)
+    h = tf.nn.leaky_relu(h)
+    # (20, 20, 32)
+    h = tf.layers.conv2d(h, 256, (4, 4), (2, 2), padding="same")
+    h = tf.layers.batch_normalization(h, training=True)
+    h = tf.nn.leaky_relu(h)
+    # (10, 10, 64)
+    h = tf.layers.conv2d(h, 256, (4, 4), (2, 2), padding="same")
+    h = tf.layers.batch_normalization(h, training=True)
+    h = tf.nn.leaky_relu(h)
+    # (5, 5, 128)
+    h = tf.layers.average_pooling2d(h, (5, 5), (1, 1), padding="valid")
+    # (1, 1, 128)
+    h = tf.layers.flatten(h)
+    # (256)
+    h = tf.layers.dense(h, 1)
+    h = tf.nn.sigmoid(h)
+    # (1)
+    h = tf.reshape(h, (-1,))
   return h
 
 def tf_log(x):
@@ -125,10 +160,21 @@ mean, var = encoder(x, True)
 z = mean + tf.sqrt(var) * tf.random_normal(tf.shape(mean))
 y = decoder(z, True)
 
-rand_diff = -0.5*tf.reduce_mean(tf.reduce_sum(1+tf_log(var)-mean**2-var, axis=1))
+z_diff = -0.5*tf.reduce_mean(tf.reduce_sum(1+tf_log(var)-mean**2-var, axis=1))
 img_diff = tf.reduce_mean(tf.reduce_sum(tf.square(x-y), axis=(1, 2, 3)))
-cost = rand_diff*0.01 + img_diff
-optimize = tf.train.AdamOptimizer().minimize(cost)
+disc_diff = tf.reduce_mean(tf.square(1-discriminator(y)))
+cost_gen = z_diff*0.01 + img_diff + disc_diff*1000
+var_list = (
+  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="encoder") +
+  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="decoder"))
+optimize_gen = tf.train.AdamOptimizer().minimize(cost_gen, var_list=var_list)
+
+y2 = discriminator(x)
+real = tf.placeholder(tf.float32, (None,))
+cost_disc = tf.reduce_mean(tf.square(y2-real))
+var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
+optimize_disc = tf.train.AdamOptimizer().minimize(cost_disc, var_list=var_list)
+
 update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
 sess.run(tf.global_variables_initializer())
@@ -140,10 +186,24 @@ for epoch in range(16):
   # 学習
   for idx in range(0, len(train_id), batch_size):
     img = [read_image(id) for id in train_id[idx:idx+batch_size]]
-    _, _, rd, id = sess.run(
-      [optimize, update, rand_diff, img_diff],
+    _, _, zd, id, dd, img_fake = sess.run(
+      [optimize_gen, update, z_diff, img_diff, disc_diff, y],
       feed_dict={x: img})
-    print(epoch, idx, rd, id)
+
+    # Realとfakeを別バッチにしたら、なぜか上手くいった
+    # https://qiita.com/underfitting/items/a0cbb035568dea33b2d7
+    _, _, cd1 = sess.run(
+      [optimize_disc, update, cost_disc],
+      feed_dict={
+        x: img,
+        real: [1.0]*len(img)})
+    _, _, cd2 = sess.run(
+      [optimize_disc, update, cost_disc],
+      feed_dict={
+        x: img_fake,
+        real: [0.0]*len(img_fake)})
+
+    print(epoch, idx, zd, id, dd, cd1, cd2)
 
   # 潜在変数の平均値を求める
   z_sum = np.array([0.0]*z_dim)
@@ -182,11 +242,11 @@ for epoch in range(16):
   canvas = Image.new("RGB", (img_w*12, img_h*num))
   for i in range(num):
     # 左端はオリジナル画像
-    canvas.paste(Image.fromarray((img_in[i*11]*255).astype('uint8')),
+    canvas.paste(Image.fromarray((img_in[i*11]*255).astype("uint8")),
       (0, i*img_h))
     # 徐々に平均顔に近づけた画像
     for j in range(0, 11):
-      canvas.paste(Image.fromarray((img_out[i*11+j]*255).astype('uint8')),
+      canvas.paste(Image.fromarray((img_out[i*11+j]*255).astype("uint8")),
         ((1+j)*img_w, i*img_h))
   canvas.save("report/result_%d.png"%epoch)
 
