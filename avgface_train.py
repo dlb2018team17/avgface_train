@@ -7,7 +7,7 @@ import random
 import tensorflow as tf
 import numpy as np
 
-z_dim = 257
+z_dim = 256
 img_w = 160
 img_h = 160
 
@@ -134,7 +134,7 @@ update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 sess.run(tf.global_variables_initializer())
 
 batch_size = 256
-for epoch in range(8):
+for epoch in range(16):
   print("epoch", epoch)
 
   # 学習
@@ -194,7 +194,7 @@ for epoch in range(8):
 tf.saved_model.simple_save(
   sess,
   "model",
-  {"input": x},
+  {"input": x, "p": p},
   {"output": y_mod, "z": z_mod})
 
 print("end")
