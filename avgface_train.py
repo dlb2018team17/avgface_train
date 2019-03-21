@@ -7,9 +7,14 @@ import random
 import tensorflow as tf
 import numpy as np
 
+"""
+x (image) -> [encoder] -> z (latent) -> [decoder] -> y (image)
+x (image) -> [discriminator] -> r (real or fake)
+"""
+
 z_dim = 256
-img_w = 160
-img_h = 160
+image_w = 160
+image_h = 160
 
 # 画像の入ったZIPを開く
 # http://mmlab.ie.cuhk.edu.hk/projects/CelebA.html
@@ -21,6 +26,8 @@ zipfile = ZipFile(BytesIO(open(zip_name, "rb").read()))
 print("load zip")
 image_num = 202599
 
+# 画像を読み出す
+# idが負数ならば左右を反転
 def read_image(id):
   bin = zipfile.read("img_align_celeba/%06d.jpg"%abs(id))
   img = Image.open(BytesIO(bin))
@@ -28,7 +35,7 @@ def read_image(id):
   left = (178-160)//2
   top = (218-160)//2
   img = img.crop((left, top, left+160, top+160))
-  #img = img.resize((img_w, img_h), Image.LANCZOS)
+  #img = img.resize((image_w, image_h), Image.LANCZOS)
   img = np.array(img)/255.0
   if id>=0:
     return img
@@ -41,11 +48,8 @@ random.seed(1234)
 random.shuffle(image_id)
 train_id = image_id[:-1000]
 test_id = image_id[-1000:]
-# 負値ならば左右反転
 train_id += [-id for id in train_id]
 random.shuffle(train_id)
-
-sess = tf.Session()
 
 # モデル
 def encoder(x, training):
@@ -152,31 +156,93 @@ def discriminator(x):
     h = tf.reshape(h, (-1,))
   return h
 
+class empty:
+  pass
+
 def tf_log(x):
     return tf.log(tf.maximum(x, 1e-10))
 
-x = tf.placeholder(tf.float32, (None, img_w, img_h, 3))
-mean, var = encoder(x, True)
-z = mean + tf.sqrt(var) * tf.random_normal(tf.shape(mean))
-y = decoder(z, True)
+def make_vae(x):
+  mean, var = encoder(x, True)
+  z = mean + tf.sqrt(var) * tf.random_normal((z_dim,))
+  y = decoder(z, True)
+  r = discriminator(y)
 
-z_diff = -0.5*tf.reduce_mean(tf.reduce_sum(1+tf_log(var)-mean**2-var, axis=1))
-img_diff = tf.reduce_mean(tf.reduce_sum(tf.square(x-y), axis=(1, 2, 3)))
-disc_diff = tf.reduce_mean(tf.square(1-discriminator(y)))
-cost_gen = z_diff*0.01 + img_diff + disc_diff*1000
-var_list = (
-  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="encoder") +
-  tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="decoder"))
-optimize_gen = tf.train.AdamOptimizer().minimize(cost_gen, var_list=var_list)
+  # 潜在変数の平均と分散の正規分布からの距離
+  loss1 = -0.5*tf.reduce_mean(tf.reduce_sum(1+tf_log(var)-mean**2-var, axis=1))
+  # 出力画像と元画像の二乗誤差
+  loss2 = tf.reduce_mean(tf.reduce_sum(tf.square(x-y), axis=(1, 2, 3)))
+  # discriminatorの正誤判定
+  loss3 = tf.reduce_mean(tf.square(1-r))
 
-y2 = discriminator(x)
-real = tf.placeholder(tf.float32, (None,))
-cost_disc = tf.reduce_mean(tf.square(y2-real))
-var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
-optimize_disc = tf.train.AdamOptimizer().minimize(cost_disc, var_list=var_list)
+  optimizer = tf.train.AdamOptimizer().minimize(
+    loss = loss1*0.01 + loss2 + loss3*1000,
+    var_list = (
+      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="encoder") +
+      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="decoder")))
+
+  ret = empty()
+  ret.x = x
+  ret.y = y
+  ret.z = mean
+  ret.loss1 = loss1
+  ret.loss2 = loss2
+  ret.loss3 = loss3
+  ret.optimizer = optimizer
+  return ret
+
+# 潜在変数を求める
+def make_conv(x):
+  z, _ = encoder(x, False)
+
+  ret = empty()
+  ret.x = x
+  ret.z = z
+  return ret
+
+def make_discriminator(x):
+  r_label = tf.placeholder(tf.float32, (None,))
+  r = discriminator(x)
+
+  loss = tf.reduce_mean(tf.square(r-r_label))
+  optimizer = tf.train.AdamOptimizer().minimize(
+    loss = loss,
+    var_list =
+      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator"))
+
+  ret = empty()
+  ret.x = x
+  ret.r = r_label
+  ret.loss = loss
+  ret.optimizer = optimizer
+  return ret
+
+# 潜在変数の平均値を埋込み、画像と平均値に近づける度合いを入力して、
+# 変化させた画像と潜在変数を出力する推論用モデルを作成
+def make_serving(x, z_avg):
+  p = tf.placeholder(tf.float32, (None,))
+  z1, _ = encoder(x, False)
+  p_tmp = tf.tile(tf.expand_dims(p, 1), (1, z_dim))
+  z2 = z1*(1-p_tmp) + z_avg*(p_tmp)
+  y = decoder(z2, False)
+
+  ret = empty()
+  ret.x = x
+  ret.p = p
+  ret.y = y
+  ret.z = z2
+  return ret
+
+# 各関数内で定義するとエラーになるので、引数で渡す
+placeholder_x = tf.placeholder(tf.float32, (None, image_w, image_h, 3))
+
+G = make_vae(placeholder_x)
+D = make_discriminator(placeholder_x)
+Z = make_conv(placeholder_x)
 
 update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
+sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
 batch_size = 256
@@ -185,76 +251,70 @@ for epoch in range(16):
 
   # 学習
   for idx in range(0, len(train_id), batch_size):
-    img = [read_image(id) for id in train_id[idx:idx+batch_size]]
-    _, _, zd, id, dd, img_fake = sess.run(
-      [optimize_gen, update, z_diff, img_diff, disc_diff, y],
-      feed_dict={x: img})
+    image = [read_image(id) for id in train_id[idx:idx+batch_size]]
+
+    _, _, G_loss1, G_loss2, G_loss3, y = sess.run(
+      fetches = [update, G.optimizer, G.loss1, G.loss2, G.loss3, G.y],
+      feed_dict = {G.x: image})
 
     # Realとfakeを別バッチにしたら、なぜか上手くいった
     # https://qiita.com/underfitting/items/a0cbb035568dea33b2d7
-    _, _, cd1 = sess.run(
-      [optimize_disc, update, cost_disc],
-      feed_dict={
-        x: img,
-        real: [1.0]*len(img)})
-    _, _, cd2 = sess.run(
-      [optimize_disc, update, cost_disc],
-      feed_dict={
-        x: img_fake,
-        real: [0.0]*len(img_fake)})
+    D_loss = [0.0]*2
+    for i in range(2):
+      _, _, D_loss[i] = sess.run(
+        fetches = [update, D.optimizer, D.loss],
+        feed_dict = {
+          D.x: [image, y][i],
+          D.r: [[1.0, 0.0][i]]*len(image)})
 
-    print(epoch, idx, zd, id, dd, cd1, cd2)
+    print(epoch, idx, G_loss1, G_loss2, G_loss3, D_loss[0], D_loss[1])
 
   # 潜在変数の平均値を求める
   z_sum = np.array([0.0]*z_dim)
-  z_tmp = tf.reduce_sum(encoder(x, False)[0], axis=0)
   for idx in range(0, len(train_id), batch_size):
-    img = [read_image(id) for id in train_id[idx:idx+batch_size]]
-    z_sum += sess.run(z_tmp, feed_dict={x: img})
+    image = [read_image(id) for id in train_id[idx:idx+batch_size]]
+    z = sess.run(Z.z, feed_dict={Z.x: image})
+    z_sum += np.sum(z, axis=0)
     print(epoch, idx)
   z_avg = z_sum/len(train_id)
   print("z_avg", z_avg.tolist())
 
-  # 平均化用モデルの構築
-  z_org = encoder(x, False)[0]
-  p = tf.placeholder(tf.float32, (None,))
-  p_tmp = tf.tile(tf.expand_dims(p, 1), [1, z_dim])
-  z_mod = z_org*(1-p_tmp) + z_avg*(p_tmp)
-  y_mod = decoder(z_mod, False)
+  # 平均化用モデル
+  S = make_serving(placeholder_x, z_avg)
 
   # 途中のモデルを保存
   tf.saved_model.simple_save(
     sess,
     "report/model_%d"%epoch,
-    {"input": x},
-    {"output": y_mod, "z": z_mod})
+    {"input": S.x, "p": S.p},
+    {"output": S.y, "z": S.z})
 
   # 途中の画像を出力
   num = 32
-  img_in = []
-  p_in = []
+  image_in = []
+  p = []
   for i in range(num):
     for j in range(11):
-      img_in += [read_image(test_id[i])]
-      p_in += [j/10]
-  img_out = sess.run(y_mod, feed_dict={x: img_in, p: p_in})
+      image_in += [read_image(test_id[i])]
+      p += [j/10]
+  image_out = sess.run(S.y, feed_dict={S.x: image_in, S.p: p})
 
-  canvas = Image.new("RGB", (img_w*12, img_h*num))
+  canvas = Image.new("RGB", (image_w*12, image_h*num))
   for i in range(num):
     # 左端はオリジナル画像
-    canvas.paste(Image.fromarray((img_in[i*11]*255).astype("uint8")),
-      (0, i*img_h))
+    canvas.paste(Image.fromarray((image_in[i*11]*255).astype("uint8")),
+      (0, i*image_h))
     # 徐々に平均顔に近づけた画像
     for j in range(0, 11):
-      canvas.paste(Image.fromarray((img_out[i*11+j]*255).astype("uint8")),
-        ((1+j)*img_w, i*img_h))
+      canvas.paste(Image.fromarray((image_out[i*11+j]*255).astype("uint8")),
+        ((1+j)*image_w, i*image_h))
   canvas.save("report/result_%d.png"%epoch)
 
 # モデルを保存
 tf.saved_model.simple_save(
   sess,
   "model",
-  {"input": x, "p": p},
-  {"output": y_mod, "z": z_mod})
+  {"input": S.x, "p": S.p},
+  {"output": S.y, "z": S.z})
 
 print("end")
