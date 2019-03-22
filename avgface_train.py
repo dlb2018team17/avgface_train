@@ -127,31 +127,23 @@ def discriminator(x):
     h = x
     # (160, 160, 3)
     h = tf.layers.conv2d(h, 32, (4, 4), (2, 2), padding="same")
-    h = tf.layers.batch_normalization(h, training=True)
     h = tf.nn.leaky_relu(h)
     # (80, 80, 8)
     h = tf.layers.conv2d(h, 64, (4, 4), (2, 2), padding="same")
-    h = tf.layers.batch_normalization(h, training=True)
     h = tf.nn.leaky_relu(h)
     # (40, 40, 16)
     h = tf.layers.conv2d(h, 128, (4, 4), (2, 2), padding="same")
-    h = tf.layers.batch_normalization(h, training=True)
     h = tf.nn.leaky_relu(h)
     # (20, 20, 32)
     h = tf.layers.conv2d(h, 256, (4, 4), (2, 2), padding="same")
-    h = tf.layers.batch_normalization(h, training=True)
     h = tf.nn.leaky_relu(h)
     # (10, 10, 64)
     h = tf.layers.conv2d(h, 256, (4, 4), (2, 2), padding="same")
-    h = tf.layers.batch_normalization(h, training=True)
     h = tf.nn.leaky_relu(h)
     # (5, 5, 128)
-    h = tf.layers.average_pooling2d(h, (5, 5), (1, 1), padding="valid")
-    # (1, 1, 128)
     h = tf.layers.flatten(h)
-    # (256)
+    # (3200)
     h = tf.layers.dense(h, 1)
-    h = tf.nn.sigmoid(h)
     # (1)
     h = tf.reshape(h, (-1,))
   return h
@@ -173,13 +165,13 @@ def make_vae(x):
   # 出力画像と元画像の二乗誤差
   loss2 = tf.reduce_mean(tf.reduce_sum(tf.square(x-y), axis=(1, 2, 3)))
   # discriminatorの正誤判定
-  loss3 = tf.reduce_mean(tf.square(1-r))
+  loss3 = tf.reduce_mean(r)
 
   optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, beta1=0.5).minimize(
-    loss = loss1*0.01 + loss2 + loss3*1000,
+    loss = loss1*0.01 + loss2 + loss3*10,
     var_list = (
-      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="encoder") +
-      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="decoder")))
+      tf.trainable_variables("encoder") +
+      tf.trainable_variables("decoder")))
 
   ret = empty()
   ret.x = x
@@ -201,19 +193,32 @@ def make_conv(x):
   return ret
 
 def make_discriminator(x):
-  r_label = tf.placeholder(tf.float32, (None,))
-  r = discriminator(x)
+  # https://github.com/changwoolee/WGAN-GP-tensorflow/blob/master/model.py
+  x_real = x
+  x_fake = tf.placeholder(tf.float32, (None, image_w, image_h, 3))
+  r_real = discriminator(x)
+  r_fake = discriminator(x_fake)
+  loss1 = tf.reduce_mean(r_real) - tf.reduce_mean(r_fake)
 
-  loss = tf.reduce_mean(tf.square(r-r_label))
+  epsilon = tf.placeholder(tf.float32, (None,))
+  e = tf.reshape(epsilon, (-1, 1, 1, 1))
+  x_hat = x_real + e*(x_fake - x_real)
+  r_hat = discriminator(x_hat)
+  (grad,) = tf.gradients(r_hat, (x_hat,))
+  slope = tf.sqrt(tf.reduce_sum(tf.square(grad), axis=(1, 2, 3)))
+  loss2 = tf.reduce_mean(tf.square(slope-1.0))
+
   optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, beta1=0.5).minimize(
-    loss = loss,
+    loss = loss1 + 10.0*loss2,
     var_list =
-      tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator"))
+      tf.trainable_variables("discriminator"))
 
   ret = empty()
-  ret.x = x
-  ret.r = r_label
-  ret.loss = loss
+  ret.x_real = x_real
+  ret.x_fake = x_fake
+  ret.epsilon = epsilon
+  ret.loss1 = loss1
+  ret.loss2 = loss2
   ret.optimizer = optimizer
   return ret
 
@@ -222,7 +227,7 @@ def make_discriminator(x):
 def make_serving(x, z_avg):
   p = tf.placeholder(tf.float32, (None,))
   z1, _ = encoder(x, False)
-  p_tmp = tf.tile(tf.expand_dims(p, 1), (1, z_dim))
+  p_tmp = tf.reshape(p, (-1, 1))
   z2 = z1*(1-p_tmp) + z_avg*(p_tmp)
   y = decoder(z2, False)
 
@@ -257,20 +262,14 @@ for epoch in range(16):
       fetches = [update, G.optimizer, G.loss1, G.loss2, G.loss3, G.y],
       feed_dict = {G.x: image})
 
-    if G_loss3<0.8:
-      # Realとfakeを別バッチにしたら、なぜか上手くいった
-      # https://qiita.com/underfitting/items/a0cbb035568dea33b2d7
-      D_loss = [0.0]*2
-      for i in range(2):
-        _, _, D_loss[i] = sess.run(
-          fetches = [update, D.optimizer, D.loss],
+    _, D_loss1, D_loss2 = sess.run(
+          fetches = [D.optimizer, D.loss1, D.loss2],
           feed_dict = {
-            D.x: [image, y][i],
-            D.r: [[1.0, 0.0][i]]*len(image)})
-    else:
-      D_loss = [-1.0, -1.0]
+            D.x_real: image,
+            D.x_fake: y,
+            D.epsilon: np.random.uniform(0.0, 1.0, len(image))})
 
-    print(epoch, idx, G_loss1, G_loss2, G_loss3, D_loss[0], D_loss[1])
+    print(epoch, idx, G_loss1, G_loss2, G_loss3, D_loss1, D_loss2)
 
   # 潜在変数の平均値を求める
   z_sum = np.array([0.0]*z_dim)
