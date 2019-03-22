@@ -171,7 +171,7 @@ def make_vae(x):
   # discriminatorの正誤判定
   loss3 = tf.reduce_mean(tf.square(1-r))
 
-  optimizer = tf.train.AdamOptimizer().minimize(
+  optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, beta1=0.5).minimize(
     loss = loss1*0.01 + loss2 + loss3*1000,
     var_list = (
       tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="encoder") +
@@ -201,7 +201,7 @@ def make_discriminator(x):
   r = discriminator(x)
 
   loss = tf.reduce_mean(tf.square(r-r_label))
-  optimizer = tf.train.AdamOptimizer().minimize(
+  optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, beta1=0.5).minimize(
     loss = loss,
     var_list =
       tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator"))
