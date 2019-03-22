@@ -282,6 +282,9 @@ for epoch in range(16):
   # 平均化用モデル
   S = make_serving(placeholder_x, z_avg)
 
+  # チェックポイント
+  tf.train.Saver().save(sess, "checkpoint/model.ckpt", global_step=epoch)
+
   # 途中のモデルを保存
   tf.saved_model.simple_save(
     sess,
