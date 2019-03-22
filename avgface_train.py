@@ -253,15 +253,18 @@ for epoch in range(16):
       fetches = [update, G.optimizer, G.loss1, G.loss2, G.loss3, G.y],
       feed_dict = {G.x: image})
 
-    # Realとfakeを別バッチにしたら、なぜか上手くいった
-    # https://qiita.com/underfitting/items/a0cbb035568dea33b2d7
-    D_loss = [0.0]*2
-    for i in range(2):
-      _, _, D_loss[i] = sess.run(
-        fetches = [update, D.optimizer, D.loss],
-        feed_dict = {
-          D.x: [image, y][i],
-          D.r: [[1.0, 0.0][i]]*len(image)})
+    if G_loss3<0.8:
+      # Realとfakeを別バッチにしたら、なぜか上手くいった
+      # https://qiita.com/underfitting/items/a0cbb035568dea33b2d7
+      D_loss = [0.0]*2
+      for i in range(2):
+        _, _, D_loss[i] = sess.run(
+          fetches = [update, D.optimizer, D.loss],
+          feed_dict = {
+            D.x: [image, y][i],
+            D.r: [[1.0, 0.0][i]]*len(image)})
+    else:
+      D_loss = [-1.0, -1.0]
 
     print(epoch, idx, G_loss1, G_loss2, G_loss3, D_loss[0], D_loss[1])
 
