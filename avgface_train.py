@@ -20,16 +20,16 @@ image_h = 160
 # http://mmlab.ie.cuhk.edu.hk/projects/CelebA.html
 # Align&Cropped Images
 zip_name = r"img_align_celeba.zip"
-#zipfile = ZipFile(zip_name)
-# なぜか途中からディスクアクセスがボトルネックになるので最初に全体を読みこむ
-zipfile = ZipFile(BytesIO(open(zip_name, "rb").read()))
-print("load zip")
+zipfile = ZipFile(zip_name)
+zipinfo = zipfile.infolist()
 image_num = 202599
+for i in range(1, image_num+1):
+  assert zipinfo[i].filename=="img_align_celeba/%06d.jpg"%i
 
 # 画像を読み出す
 # idが負数ならば左右を反転
 def read_image(id):
-  bin = zipfile.read("img_align_celeba/%06d.jpg"%abs(id))
+  bin = zipfile.read(zipinfo[abs(id)])
   img = Image.open(BytesIO(bin))
   # 中央160x160を切り出す
   left = (178-160)//2
