@@ -249,9 +249,11 @@ update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
+#tf.train.Saver().restore(sess, "checkpoint/model.ckpt-2")
 
 batch_size = 256
 for epoch in range(16):
+#for epoch in range(3,16):
   print("epoch", epoch)
 
   # 学習
