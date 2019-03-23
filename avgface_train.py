@@ -9,7 +9,6 @@ import numpy as np
 
 """
 x (image) -> [encoder] -> z (latent) -> [decoder] -> y (image)
-x (image) -> [discriminator] -> r (real or fake)
 """
 
 z_dim = 256
@@ -122,32 +121,6 @@ def decoder(z, training):
     # (160, 160, 3)
   return h
 
-def discriminator(x):
-  with tf.variable_scope("discriminator", reuse=tf.AUTO_REUSE):
-    h = x
-    # (160, 160, 3)
-    h = tf.layers.conv2d(h, 32, (4, 4), (2, 2), padding="same")
-    h = tf.nn.leaky_relu(h)
-    # (80, 80, 8)
-    h = tf.layers.conv2d(h, 64, (4, 4), (2, 2), padding="same")
-    h = tf.nn.leaky_relu(h)
-    # (40, 40, 16)
-    h = tf.layers.conv2d(h, 128, (4, 4), (2, 2), padding="same")
-    h = tf.nn.leaky_relu(h)
-    # (20, 20, 32)
-    h = tf.layers.conv2d(h, 256, (4, 4), (2, 2), padding="same")
-    h = tf.nn.leaky_relu(h)
-    # (10, 10, 64)
-    h = tf.layers.conv2d(h, 256, (4, 4), (2, 2), padding="same")
-    h = tf.nn.leaky_relu(h)
-    # (5, 5, 128)
-    h = tf.layers.flatten(h)
-    # (3200)
-    h = tf.layers.dense(h, 1)
-    # (1)
-    h = tf.reshape(h, (-1,))
-  return h
-
 class empty:
   pass
 
@@ -158,28 +131,23 @@ def make_vae(x):
   mean, var = encoder(x, True)
   z = mean + tf.sqrt(var) * tf.random_normal((z_dim,))
   y = decoder(z, True)
-  r = discriminator(y)
 
   # 潜在変数の平均と分散の正規分布からの距離
   loss1 = -0.5*tf.reduce_mean(tf.reduce_sum(1+tf_log(var)-mean**2-var, axis=1))
   # 出力画像と元画像の二乗誤差
   loss2 = tf.reduce_mean(tf.reduce_sum(tf.square(x-y), axis=(1, 2, 3)))
-  # discriminatorの正誤判定
-  loss3 = tf.reduce_mean(r)
 
-  optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, beta1=0.5).minimize(
-    loss = loss1*0.01 + loss2 + loss3*10,
+  optimizer = tf.train.AdamOptimizer().minimize(
+    loss = loss1*0.01 + loss2,
     var_list = (
       tf.trainable_variables("encoder") +
       tf.trainable_variables("decoder")))
 
   ret = empty()
   ret.x = x
-  ret.y = y
   ret.z = mean
   ret.loss1 = loss1
   ret.loss2 = loss2
-  ret.loss3 = loss3
   ret.optimizer = optimizer
   return ret
 
@@ -190,36 +158,6 @@ def make_conv(x):
   ret = empty()
   ret.x = x
   ret.z = z
-  return ret
-
-def make_discriminator(x):
-  # https://github.com/changwoolee/WGAN-GP-tensorflow/blob/master/model.py
-  x_real = x
-  x_fake = tf.placeholder(tf.float32, (None, image_w, image_h, 3))
-  r_real = discriminator(x)
-  r_fake = discriminator(x_fake)
-  loss1 = tf.reduce_mean(r_real) - tf.reduce_mean(r_fake)
-
-  epsilon = tf.placeholder(tf.float32, (None,))
-  e = tf.reshape(epsilon, (-1, 1, 1, 1))
-  x_hat = x_real + e*(x_fake - x_real)
-  r_hat = discriminator(x_hat)
-  (grad,) = tf.gradients(r_hat, (x_hat,))
-  slope = tf.sqrt(tf.reduce_sum(tf.square(grad), axis=(1, 2, 3)))
-  loss2 = tf.reduce_mean(tf.square(slope-1.0))
-
-  optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, beta1=0.5).minimize(
-    loss = loss1 + 10.0*loss2,
-    var_list =
-      tf.trainable_variables("discriminator"))
-
-  ret = empty()
-  ret.x_real = x_real
-  ret.x_fake = x_fake
-  ret.epsilon = epsilon
-  ret.loss1 = loss1
-  ret.loss2 = loss2
-  ret.optimizer = optimizer
   return ret
 
 # 潜在変数の平均値を埋込み、画像と平均値に近づける度合いを入力して、
@@ -242,63 +180,55 @@ def make_serving(x, z_avg):
 placeholder_x = tf.placeholder(tf.float32, (None, image_w, image_h, 3))
 
 G = make_vae(placeholder_x)
-D = make_discriminator(placeholder_x)
 Z = make_conv(placeholder_x)
 
 update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
-config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.8))
+config = tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))
 
 sess = tf.Session(config=config)
 sess.run(tf.global_variables_initializer())
 #tf.train.Saver().restore(sess, "checkpoint/model.ckpt-2")
 
 batch_size = 256
-for epoch in range(16):
-#for epoch in range(3,16):
+epoch_num = 16
+
+for epoch in range(epoch_num):
+#for epoch in range(3, epoch_num):
   print("epoch", epoch)
 
   # 学習
+  z_sum = np.array([0.0]*z_dim)
+
   for idx in range(0, len(train_id), batch_size):
     image = [read_image(id) for id in train_id[idx:idx+batch_size]]
 
-    _, _, G_loss1, G_loss2, G_loss3, y = sess.run(
-      fetches = [update, G.optimizer, G.loss1, G.loss2, G.loss3, G.y],
+    _, _, G_loss1, G_loss2, z = sess.run(
+      fetches = [update, G.optimizer, G.loss1, G.loss2, G.z],
       feed_dict = {G.x: image})
 
-    _, D_loss1, D_loss2 = sess.run(
-          fetches = [D.optimizer, D.loss1, D.loss2],
-          feed_dict = {
-            D.x_real: image,
-            D.x_fake: y,
-            D.epsilon: np.random.uniform(0.0, 1.0, len(image))})
-
-    print(epoch, idx, G_loss1, G_loss2, G_loss3, D_loss1, D_loss2)
-
-  # 潜在変数の平均値を求める
-  z_sum = np.array([0.0]*z_dim)
-  for idx in range(0, len(train_id), batch_size):
-    image = [read_image(id) for id in train_id[idx:idx+batch_size]]
-    z = sess.run(Z.z, feed_dict={Z.x: image})
     z_sum += np.sum(z, axis=0)
-    print(epoch, idx)
+
+    print(epoch, idx, G_loss1, G_loss2)
+
   z_avg = z_sum/len(train_id)
   print("z_avg", z_avg.tolist())
+
+  # 最後は全画像の潜在変数をあらためて求める
+  if epoch==epoch_num-1:
+    z_sum = np.array([0.0]*z_dim)
+    for idx in range(0, len(train_id), batch_size):
+      image = [read_image(id) for id in train_id[idx:idx+batch_size]]
+      z = sess.run(Z.z, feed_dict={Z.x: image})
+      z_sum += np.sum(z, axis=0)
+      print(epoch, idx)
+    z_avg = z_sum/len(train_id)
+    print("z_avg", z_avg.tolist())
 
   # 平均化用モデル
   S = make_serving(placeholder_x, z_avg)
 
-  # チェックポイント
-  tf.train.Saver().save(sess, "checkpoint/model.ckpt", global_step=epoch)
-
-  # 途中のモデルを保存
-  tf.saved_model.simple_save(
-    sess,
-    "report/model_%d"%epoch,
-    {"input": S.x, "p": S.p},
-    {"output": S.y, "z": S.z})
-
-  # 途中の画像を出力
+  # 結果を出力
   num = 32
   image_in = []
   p = []
@@ -318,6 +248,9 @@ for epoch in range(16):
       canvas.paste(Image.fromarray((image_out[i*11+j]*255).astype("uint8")),
         ((1+j)*image_w, i*image_h))
   canvas.save("report/result_%d.png"%epoch)
+
+  # チェックポイント
+  tf.train.Saver().save(sess, "checkpoint/model.ckpt", global_step=epoch)
 
 # モデルを保存
 tf.saved_model.simple_save(
