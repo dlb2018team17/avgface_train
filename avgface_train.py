@@ -247,7 +247,9 @@ Z = make_conv(placeholder_x)
 
 update = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
-sess = tf.Session()
+config = tf.ConfigProto(gpu_options=tf.GPUOptions(per_process_gpu_memory_fraction=0.8))
+
+sess = tf.Session(config=config)
 sess.run(tf.global_variables_initializer())
 #tf.train.Saver().restore(sess, "checkpoint/model.ckpt-2")
 
